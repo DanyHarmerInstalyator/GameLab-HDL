@@ -15,6 +15,7 @@ app = FastAPI(title="GameLab HDL Backend")
 # Настройка CORS — разрешаем запросы с фронтенда
 origins = [
     "https://gamelabhdl.netlify.app",
+    "https://hdlgame.netlify.app"
     "http://localhost:8080",
     "http://127.0.0.1:8080",
     "http://localhost:5500",
