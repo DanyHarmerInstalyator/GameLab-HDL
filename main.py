@@ -132,3 +132,29 @@ def debug_users():
     users = [r[0] for r in cursor.fetchall()]
     conn.close()
     return {"users": users}
+
+@app.get("/api/history/{user_id}")
+def get_history(user_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT t.amount, t.resource, t.timestamp, u.name as admin_name, t.comment
+        FROM transactions t
+        LEFT JOIN users u ON t.admin_id = u.id
+        WHERE t.user_id = ?
+        ORDER BY t.timestamp DESC
+        LIMIT 50
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "date": row["timestamp"],
+            "resource": row["resource"],        # "coins", "exp", "score"
+            "amount": row["amount"],
+            "admin": row["admin_name"] or "Система",
+            "comment": row["comment"] or "Без комментария"
+        }
+        for row in rows
+    ]
