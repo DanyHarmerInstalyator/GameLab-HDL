@@ -1,0 +1,5 @@
+user_credentials.txt
+bitrix_users.json
+.venv/
+__pycache__/
+*.pyc
