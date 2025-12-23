@@ -78,8 +78,8 @@ def login(data: UserLogin, response: Response):
         key="session_id",
         value=session_id,
         httponly=True,
-        secure=False,  # True на HTTPS (Render/Netlify)
-        samesite="lax"
+        secure=True,  
+        samesite="none"
     )
 
     return {
