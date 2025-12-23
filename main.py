@@ -1,36 +1,33 @@
-# backend/main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 from database import init_db, get_db_connection
 from models import verify_password
-import os
 
-# Инициализация базы данных при запуске
+# Инициализация БД
 init_db()
 
 app = FastAPI(title="GameLab HDL Backend")
 
-# Настройка CORS — разрешаем запросы с фронтенда
-origins = [
-    "https://gamelabhdl.netlify.app",
-    "https://hdlgame.netlify.app",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "http://localhost:5500",
-    "http://127.0.0.1:5500",
-]
-
+# ✅ ЕДИНСТВЕННЫЙ, ЧИСТЫЙ CORS — без дублирования и пробелов
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "http://127.0.0.1:5501",      # VS Code Live Server
+        "http://localhost:5501",
+        "http://127.0.0.1:5500",      # Другие Live Server варианты
+        "http://localhost:5500",
+        "http://localhost:8080",
+        "https://hdlgame.netlify.app",  # ← БЕЗ пробелов!
+        "https://gamelabhdl.netlify.app"  # ← БЕЗ пробелов!
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Схемы данных ---
+# --- Схемы ---
 class UserLogin(BaseModel):
     name: str
     password: str
@@ -50,7 +47,6 @@ class AddCoinsRequest(BaseModel):
     admin_password: str
 
 # --- Эндпоинты ---
-
 @app.post("/api/login", response_model=UserResponse)
 def login(data: UserLogin):
     conn = get_db_connection()
