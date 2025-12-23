@@ -1,33 +1,35 @@
-from fastapi import FastAPI, HTTPException
+# backend/main.py
+from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 from database import init_db, get_db_connection
 from models import verify_password
+import os
 
-# Инициализация БД
+# Инициализация базы данных при запуске
 init_db()
 
 app = FastAPI(title="GameLab HDL Backend")
 
-# ✅ ЕДИНСТВЕННЫЙ, ЧИСТЫЙ CORS — без дублирования и пробелов
+# Простое in-memory хранилище сессий (для демо / 1 инстанс)
+active_sessions = {}
+
+# Настройка CORS — УБРАНЫ ПРОБЕЛЫ!
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://127.0.0.1:5501",      # VS Code Live Server
+        "http://127.0.0.1:5501",
         "http://localhost:5501",
-        "http://127.0.0.1:5500",      # Другие Live Server варианты
-        "http://localhost:5500",
-        "http://localhost:8080",
-        "https://hdlgame.netlify.app",  # ← БЕЗ пробелов!
-        "https://gamelabhdl.netlify.app"  # ← БЕЗ пробелов!
+        "https://hdlgame.netlify.app",
+        "https://gamelabhdl.netlify.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Схемы ---
+# --- Схемы данных ---
 class UserLogin(BaseModel):
     name: str
     password: str
@@ -40,15 +42,25 @@ class UserResponse(BaseModel):
     exp: int
     score: int
 
-class AddCoinsRequest(BaseModel):
-    target_name: str
-    amount: int
-    admin_name: str
-    admin_password: str
+# --- Вспомогательные функции ---
+def get_current_user(request: Request):
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in active_sessions:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    user_id = active_sessions[session_id]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    if not user:
+        raise HTTPException(status_code=401, detail="Пользователь удалён")
+    return {"id": user["id"], "name": user["name"]}
 
 # --- Эндпоинты ---
+
 @app.post("/api/login", response_model=UserResponse)
-def login(data: UserLogin):
+def login(data: UserLogin, response: Response):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, password_hash, coins, exp, score FROM users WHERE name = ?", (data.name,))
@@ -58,8 +70,20 @@ def login(data: UserLogin):
     if not row or not verify_password(data.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Неверное имя или пароль")
 
+    user_id = row["id"]
+    session_id = os.urandom(24).hex()
+    active_sessions[session_id] = user_id
+
+    response.set_cookie(
+        key="session_id",
+        value=session_id,
+        httponly=True,
+        secure=False,  # True на HTTPS (Render/Netlify)
+        samesite="lax"
+    )
+
     return {
-        "id": row["id"],
+        "id": user_id,
         "name": row["name"],
         "coins": row["coins"],
         "exp": row["exp"],
@@ -85,51 +109,33 @@ def get_users():
     ]
 
 @app.post("/api/coins/add")
-def add_coins(data: AddCoinsRequest):
+def add_coins(target_name: str, amount: int, current_user=Depends(get_current_user)):
+    if current_user["id"] != 175:
+        raise HTTPException(status_code=403, detail="Только Наталья может начислять коины")
+
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Сумма должна быть положительной")
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Проверка администратора
-    cursor.execute("SELECT id, password_hash FROM users WHERE name = ?", (data.admin_name,))
-    admin = cursor.fetchone()
-    if not admin or not verify_password(data.admin_password, admin["password_hash"]):
-        conn.close()
-        raise HTTPException(status_code=403, detail="Неверные данные администратора")
-
-    # Поиск целевого пользователя
-    cursor.execute("SELECT id FROM users WHERE name = ?", (data.target_name,))
+    cursor.execute("SELECT id FROM users WHERE name = ?", (target_name,))
     target = cursor.fetchone()
     if not target:
         conn.close()
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    if data.amount <= 0:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Сумма должна быть положительной")
-
-    # Обновление коинов
-    cursor.execute("UPDATE users SET coins = coins + ? WHERE name = ?", (data.amount, data.target_name))
-
-    # Логирование транзакции
+    cursor.execute("UPDATE users SET coins = coins + ? WHERE name = ?", (amount, target_name))
     cursor.execute(
         "INSERT INTO transactions (user_id, admin_id, action, amount, resource, comment) VALUES (?, ?, ?, ?, ?, ?)",
-        (target["id"], admin["id"], "add", data.amount, "coins", f"Начислено админом {data.admin_name}")
+        (target["id"], current_user["id"], "add", amount, "coins", f"Начислено админом {current_user['name']}")
     )
 
     conn.commit()
     conn.close()
-    return {"status": "success", "message": f"{data.amount} коинов добавлено {data.target_name}"}
+    return {"message": f"{amount} коинов добавлено {target_name}"}
 
-# --- Дополнительно: debug-эндпоинт (удали после проверки) ---
-@app.get("/api/debug/users")
-def debug_users():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM users")
-    users = [r[0] for r in cursor.fetchall()]
-    conn.close()
-    return {"users": users}
-
+# --- История ---
 @app.get("/api/history/{user_id}")
 def get_history(user_id: int):
     conn = get_db_connection()
@@ -148,7 +154,7 @@ def get_history(user_id: int):
     return [
         {
             "date": row["timestamp"],
-            "resource": row["resource"],        # "coins", "exp", "score"
+            "resource": row["resource"],
             "amount": row["amount"],
             "admin": row["admin_name"] or "Система",
             "comment": row["comment"] or "Без комментария"
