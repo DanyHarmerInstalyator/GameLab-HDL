@@ -15,7 +15,7 @@ app = FastAPI(title="GameLab HDL Backend")
 # Простое in-memory хранилище сессий (для демо / 1 инстанс)
 active_sessions = {}
 
-# Настройка CORS — УБРАНЫ ПРОБЕЛЫ!
+# Настройка CORS/
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -27,6 +27,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # --- Схемы данных ---
@@ -45,16 +46,28 @@ class UserResponse(BaseModel):
 # --- Вспомогательные функции ---
 def get_current_user(request: Request):
     session_id = request.cookies.get("session_id")
-    if not session_id or session_id not in active_sessions:
-        raise HTTPException(status_code=401, detail="Не авторизован")
+    print(f"DEBUG get_current_user: session_id = {session_id}")  # Отладка
+    
+    if not session_id:
+        print("DEBUG: No session_id in cookies")  # Отладка
+        raise HTTPException(status_code=401, detail="Не авторизован: нет сессии")
+    
+    if session_id not in active_sessions:
+        print(f"DEBUG: Session {session_id} not found in active_sessions")  # Отладка
+        raise HTTPException(status_code=401, detail="Сессия истекла")
+    
     user_id = active_sessions[session_id]
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name FROM users WHERE id = ?", (user_id,))
     user = cursor.fetchone()
     conn.close()
+    
     if not user:
+        print(f"DEBUG: User {user_id} not found in database")  # Отладка
         raise HTTPException(status_code=401, detail="Пользователь удалён")
+    
+    print(f"DEBUG: Current user found: {user}")  # Отладка
     return {"id": user["id"], "name": user["name"]}
 
 # --- Эндпоинты ---
@@ -109,7 +122,17 @@ def get_users():
     ]
 
 @app.post("/api/coins/add")
-def add_coins(target_name: str, amount: int, current_user=Depends(get_current_user)):
+def add_coins(
+    target_name: str, 
+    amount: int, 
+    request: Request,  # Добавляем параметр request
+    current_user = Depends(get_current_user)
+):
+    # Отладочная информация
+    session_id = request.cookies.get("session_id")
+    print(f"DEBUG: Session ID from cookie: {session_id}")
+    print(f"DEBUG: Current user: {current_user}")
+    
     if current_user["id"] != 175:
         raise HTTPException(status_code=403, detail="Только Наталья может начислять коины")
 
